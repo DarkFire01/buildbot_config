@@ -11,7 +11,9 @@ REASON="$3"
 source ../../config.inc
 
 rm -rf "${ROSAUTOTEST_DIR}"
-mv "${ROSTESTS_PREFIX}-${SUFFIX}" "${ROSAUTOTEST_DIR}" || exit $?
+# Download the tests of exactly this run from the build machine's host_server.py.
+# fetch_tests.py waits until the build machine has marked the folder as ready.
+python -u "$(dirname "$0")/fetch_tests.py" "$(basename "${ROSTESTS_PREFIX}-${SUFFIX}")" "${ROSAUTOTEST_DIR}" || exit $?
 
 cd $WORKDIR
 mv ${ROSAUTOTEST_DIR}/rosautotest.exe . || exit $?
