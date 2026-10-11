@@ -130,5 +130,8 @@ if __name__ == "__main__":
     arg_parser.add_argument("local_dest", help="Local path to download the folder to")
     args = arg_parser.parse_args()
 
+    if args.folder_name.strip() in ["", ".", ".."]:
+        arg_parser.error("Invalid folder name: '" + args.folder_name + "'")
+
     if not fetch(args.server, args.folder_name, args.local_dest, args.timeout):
         sys.exit(1)
