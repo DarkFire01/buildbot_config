@@ -15,6 +15,7 @@ import functools
 import http.server
 import shutil
 import socketserver
+import sys
 import urllib.parse
 from pathlib import Path
 
@@ -87,7 +88,9 @@ class StoppableTCPServer(socketserver.TCPServer):
 
 
 def run_server(artifacts_dir, port, expected_folder):
-    socketserver.TCPServer.allow_reuse_address = True
+    # On Windows, SO_REUSEADDR lets a second server silently bind the same port and steal requests,
+    # so only use it elsewhere (where it just avoids TIME_WAIT errors on restart).
+    socketserver.TCPServer.allow_reuse_address = sys.platform != "win32"
     handler = functools.partial(ArtifactHandler, directory=artifacts_dir)
     server = StoppableTCPServer(artifacts_dir, expected_folder, ("", port), handler)
 

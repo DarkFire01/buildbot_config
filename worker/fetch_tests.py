@@ -189,6 +189,9 @@ if __name__ == "__main__":
 
     if args.folder_name.strip() in ["", ".", ".."]:
         arg_parser.error("Invalid folder name: '" + args.folder_name + "'")
+    if any(ord(c) < 32 for c in args.folder_name):
+        # Usually a CR from a builder_config.inc with Windows line endings
+        arg_parser.error("Folder name contains control characters: " + repr(args.folder_name))
 
     if not fetch(args.server, args.folder_name, args.local_dest, args.timeout):
         sys.exit(1)
