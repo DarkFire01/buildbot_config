@@ -15,6 +15,7 @@ import sys
 import time
 import urllib
 import urllib2
+import urlparse
 from HTMLParser import HTMLParser
 
 DEFAULT_SERVER_URL = "http://192.168.37.16:8000"
@@ -22,6 +23,7 @@ DEFAULT_TIMEOUT = 4 * 60 * 60  # Seconds to wait for the folder to become ready,
 POLL_INTERVAL = 5  # Seconds to wait before checking again
 READY_SUFFIX = ".ready"
 NOTIFY_ATTEMPTS = 5
+REMOVE_ATTEMPTS = 12
 
 
 class SimpleDirectoryParser(HTMLParser):
@@ -37,17 +39,59 @@ class SimpleDirectoryParser(HTMLParser):
                     self.links.append(value)
 
 
-def make_url(server_url, name):
-    return server_url.rstrip("/") + "/" + urllib.quote(name)
+def remove_tree(path):
+    # Virus scanners, the search indexer or a test process that is still exiting
+    # can briefly hold a handle on the folder, so retry for a while before giving up.
+    for attempt in range(REMOVE_ATTEMPTS):
+        if not os.path.exists(path):
+            return
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as e:
+            print "[CLIENT] Could not delete " + path + " (" + str(e) + "), retrying..."
+            time.sleep(POLL_INTERVAL)
+
+    if os.path.exists(path):
+        shutil.rmtree(path)
+
+
+def replace_tree(src, dest):
+    try:
+        remove_tree(dest)
+    except OSError:
+        # The folder itself is still held open, but its contents can usually still be replaced
+        print "[CLIENT] " + dest + " is still in use, replacing its contents instead."
+        for name in os.listdir(dest):
+            path = os.path.join(dest, name)
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        for name in os.listdir(src):
+            os.rename(os.path.join(src, name), os.path.join(dest, name))
+        os.rmdir(src)
+        return
+
+    os.rename(src, dest)
+
+
+def make_url(server_url, name, is_folder=False):
+    # Build the URL from its components, so it is combined and quoted correctly
+    parts = urlparse.urlparse(server_url)
+    path = parts.path.rstrip("/") + "/" + urllib.quote(name) + ("/" if is_folder else "")
+    return urlparse.urlunparse((parts.scheme, parts.netloc, path, "", "", ""))
 
 
 def is_ready(server_url, folder_name):
     try:
         urllib2.urlopen(make_url(server_url, folder_name + READY_SUFFIX), timeout=10)
         return True
-    except Exception:
-        # Server isn't up yet or the folder isn't complete yet
-        return False
+    except urllib2.HTTPError as e:
+        if e.code == 404:
+            # The folder isn't complete yet
+            return False
+        raise
 
 
 def download_file(remote_url, local_path):
@@ -57,7 +101,7 @@ def download_file(remote_url, local_path):
 
 
 def download_folder(remote_url, local_dir):
-    # remote_url must end with a slash, so the relative links of the listing can be appended to it
+    # remote_url must end with a slash, so the relative links of the listing resolve below it
     if not os.path.exists(local_dir):
         os.makedirs(local_dir)
 
@@ -69,14 +113,17 @@ def download_folder(remote_url, local_dir):
             continue
 
         name = urllib.unquote(link.rstrip("/"))
+        # Never let a listing entry escape local_dir (e.g. "%2e%2e%2f", "C:", or a link to another host)
+        if not name or name in [".", ".."] or "/" in name or "\\" in name or os.path.splitdrive(name)[0]:
+            raise ValueError("Unsafe directory entry: " + repr(name))
         if link.endswith("/"):
-            download_folder(remote_url + link, os.path.join(local_dir, name))
+            download_folder(urlparse.urljoin(remote_url, link), os.path.join(local_dir, name))
         else:
-            download_file(remote_url + link, os.path.join(local_dir, name))
+            download_file(urlparse.urljoin(remote_url, link), os.path.join(local_dir, name))
 
 
 def notify_download_complete(server_url, folder_name):
-    done_url = server_url.rstrip("/") + "/download-complete"
+    done_url = make_url(server_url, "download-complete")
 
     for attempt in range(NOTIFY_ATTEMPTS):
         try:
@@ -96,7 +143,18 @@ def fetch(server_url, folder_name, local_dest, timeout):
     print "[CLIENT] Waiting for " + folder_name + " on " + server_url + "..."
 
     deadline = time.time() + timeout if timeout > 0 else None
-    while not is_ready(server_url, folder_name):
+    last_error = None
+    while True:
+        try:
+            if is_ready(server_url, folder_name):
+                break
+        except Exception as e:
+            # Server isn't up yet or failed. Only print an error when it changes,
+            # so hours of polling don't flood the build log.
+            if str(e) != last_error:
+                print "[CLIENT] Error checking " + folder_name + ": " + str(e) + ", retrying every " + str(POLL_INTERVAL) + "s..."
+                last_error = str(e)
+
         if deadline is not None and time.time() > deadline:
             print "[CLIENT] Timed out waiting for " + folder_name + " to become ready."
             return False
@@ -107,17 +165,16 @@ def fetch(server_url, folder_name, local_dest, timeout):
 
     # Download into a temporary folder, so an aborted download never looks like a complete one
     partial_dest = local_dest + ".partial"
-    for path in [partial_dest, local_dest]:
-        if os.path.exists(path):
-            shutil.rmtree(path)
+    remove_tree(partial_dest)
 
-    download_folder(make_url(server_url, folder_name) + "/", partial_dest)
-    os.rename(partial_dest, local_dest)
+    download_folder(make_url(server_url, folder_name, is_folder=True), partial_dest)
+    replace_tree(partial_dest, local_dest)
     print "[CLIENT] Download complete."
 
     # Notify Win7 to delete the source folder and exit host_server.py
     if not notify_download_complete(server_url, folder_name):
-        print "[CLIENT] Warning: Win7 server was not notified, its copy of " + folder_name + " is left behind."
+        print "[CLIENT] Error: Win7 server was not notified, its copy of " + folder_name + " is left behind."
+        return False
 
     return True
 

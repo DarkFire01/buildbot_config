@@ -7,7 +7,7 @@ REVISION_SUFFIX=`cat revision_suffix`
 export ROSTESTS_INSTALL="${ROSTESTS_PREFIX}-${REVISION_SUFFIX}-${UPLOAD_SUFFIX}"
 
 # The .ready marker tells fetch_tests.py (via host_server.py) that ROSTESTS_INSTALL is complete and may be downloaded.
-rm -f "$ROSTESTS_INSTALL.ready"
+rm -f "$ROSTESTS_INSTALL.ready" || exit $?
 rm -rf $ROSTESTS_INSTALL
 mkdir -p $ROSTESTS_INSTALL
 

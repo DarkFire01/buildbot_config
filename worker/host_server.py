@@ -13,10 +13,10 @@ Without it, the server keeps running and serves every run.
 import argparse
 import functools
 import http.server
-import os
 import shutil
 import socketserver
 import urllib.parse
+from pathlib import Path
 
 DEFAULT_ARTIFACTS_DIR = r"C:\Tests_For_Carrier-Win2003-x64"
 DEFAULT_PORT = 8000
@@ -40,8 +40,8 @@ class ArtifactHandler(http.server.SimpleHTTPRequestHandler):
         content_length = int(self.headers.get("Content-Length", 0))
         folder_name = self.rfile.read(content_length).decode("utf-8").strip()
 
-        safe_folder_name = os.path.basename(folder_name.rstrip("/\\"))
-        if safe_folder_name in ["", ".", ".."]:
+        safe_folder_name = Path(folder_name).name
+        if safe_folder_name in ["", ".."]:
             self.send_error(400, "Invalid folder name")
             return
 
@@ -50,17 +50,17 @@ class ArtifactHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(409, f"Waiting for {expected}, not {safe_folder_name}")
             return
 
-        target_path = os.path.join(self.server.artifacts_dir, safe_folder_name)
-        ready_path = target_path + READY_SUFFIX
-        if not os.path.exists(ready_path):
+        target_path = self.server.artifacts_dir / safe_folder_name
+        ready_path = target_path.with_name(target_path.name + READY_SUFFIX)
+        if not ready_path.exists():
             self.send_error(409, f"{safe_folder_name} is not ready")
             return
 
         # Cleanup source artifacts on Win7 host. Remove the marker first,
         # so the folder is never served again while it is being deleted.
         try:
-            os.remove(ready_path)
-            if os.path.isdir(target_path):
+            ready_path.unlink()
+            if target_path.is_dir():
                 shutil.rmtree(target_path)
             print(f"[SERVER] Cleaned up served folder: {safe_folder_name}")
         except Exception as e:
@@ -77,7 +77,7 @@ class StoppableTCPServer(socketserver.TCPServer):
 
     def __init__(self, artifacts_dir, expected_folder, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.artifacts_dir = artifacts_dir
+        self.artifacts_dir = Path(artifacts_dir)
         self.expected_folder = expected_folder
         self.should_exit = False
 
